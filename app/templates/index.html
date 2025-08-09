@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>🔍 AI Medical Chatbot</title>
+    <style>
+        :root{
+          --bg:#0b1020; --fg:#e8eef6; --muted:#9fb3c8; --card:#121a33; --input:#0f1730;
+          --user:#2c6cff33; --assistant:#26324a; --accent:#6aa9ff; --border:#243252;
+        }
+        *{box-sizing:border-box}
+        body{font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji"; margin:0; background:var(--bg); color:var(--fg);}
+        .page{max-width: 920px; margin: 0 auto; padding: 24px;}
+        header{display:flex; align-items:center; gap:14px; margin-bottom:16px;}
+        header h1{font-size: clamp(22px, 3vw, 28px); margin:0;}
+        .pill{padding:4px 10px; border:1px solid var(--border); border-radius:999px; color:var(--muted); font-size:12px;}
+        .wrap{display:grid; grid-template-columns: 1fr 280px; gap: 18px;}
+        @media (max-width: 900px){ .wrap{grid-template-columns:1fr} }
+
+        .panel{background:var(--card); border:1px solid var(--border); border-radius:16px; padding:16px;}
+        .chat{height: min(62vh, 640px); overflow:auto; display:flex; flex-direction:column; gap:12px; scroll-behavior:smooth;}
+        .msg{padding:12px 14px; border-radius:14px; line-height:1.45; white-space:pre-wrap;}
+        .msg.user{align-self:flex-end; background:var(--user); border:1px solid var(--border)}
+        .msg.assistant{align-self:flex-start; background:var(--assistant); border:1px solid var(--border)}
+        .msg .role{font-weight:700; opacity:.9; display:block; margin-bottom:4px;}
+        .msg.pending{opacity:.85; outline:1px dashed var(--border)}
+        .input-row{display:flex; gap:10px; align-items:flex-end; margin-top:10px}
+        textarea{flex:1; resize:vertical; min-height:64px; max-height:220px; padding:10px 12px; font-size:15px; color:var(--fg); background:var(--input); border:1px solid var(--border); border-radius:12px; outline:none;}
+        button{border:1px solid var(--border); background:linear-gradient(180deg,#1a2a4b,#162241); color:var(--fg); padding:10px 14px; border-radius:12px; cursor:pointer;}
+        button:disabled{opacity:.6; cursor:not-allowed}
+        .muted{color:var(--muted); font-size:12px}
+        .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+        label.small{font-size:12px; color:var(--muted)}
+        input[type="range"]{width:120px}
+        .controls .row{justify-content:space-between}
+        .kpis{display:grid; grid-template-columns: repeat(3,1fr); gap:10px; margin-top:10px}
+        .kpi{background:var(--assistant); border:1px solid var(--border); border-radius:12px; padding:10px}
+        .footer-actions{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px}
+        .toast{position:fixed; inset:auto 16px 16px auto; background:#1e2f58; color:#eaf2ff; padding:8px 12px; border:1px solid var(--border); border-radius:10px; display:none}
+    </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>🔍 AI Medical Chatbot</h1>
+      <span class="pill">Advanced Mode</span>
+    </header>
+
+    <div class="wrap">
+      <!-- Chat panel -->
+      <section class="panel">
+        <div id="chat" class="chat">
+          {% for msg in messages %}
+            <div class="msg {{ msg.role }}">
+              <span class="role">{{ msg.role|capitalize }}</span>
+              <div class="content">{{ msg.content | safe | nl2br }}</div>
+            </div>
+          {% endfor %}
+        </div>
+
+        <div class="input-row">
+          <textarea id="prompt" placeholder="Ask a medical question... (Shift+Enter for newline)"></textarea>
+          <button id="sendBtn">Send</button>
+        </div>
+        <div class="footer-actions">
+          <button id="clearBtn">Clear Chat</button>
+          <button id="copyBtn">Copy Conversation</button>
+          <button id="downloadBtn">Download .txt</button>
+        </div>
+        <p class="muted">Answers may be AI‑generated and could be inaccurate. For medical concerns, consult a professional.</p>
+      </section>
+
+      <!-- Controls panel -->
+      <aside class="panel controls">
+        <div class="row">
+          <label class="small">Model</label>
+          <select id="model">
+            <option value="gpt-4o-mini">gpt-4o-mini</option>
+            <option value="gpt-4o">gpt-4o</option>
+            <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+            <option value="gpt-4.1">gpt-4.1</option>
+          </select>
+        </div>
+
+        <div class="row" style="margin-top:8px">
+          <label class="small">Temperature <span id="tempVal" class="muted">0.3</span></label>
+          <input id="temperature" type="range" min="0" max="1" step="0.05" value="0.3" />
+        </div>
+
+        <div class="row" style="margin-top:8px">
+          <label class="small">Max tokens</label>
+          <input id="maxTokens" type="number" min="64" max="2048" step="32" value="512" style="width:110px; background:var(--input); color:var(--fg); border:1px solid var(--border); border-radius:8px; padding:6px 8px" />
+        </div>
+
+        <div class="kpis">
+          <div class="kpi"><div class="muted">Model</div><div id="kModel">-</div></div>
+          <div class="kpi"><div class="muted">Latency</div><div id="kLatency">-</div></div>
+          <div class="kpi"><div class="muted">Tokens</div><div id="kTokens">-</div></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const chat = document.getElementById('chat');
+    const promptEl = document.getElementById('prompt');
+    const sendBtn = document.getElementById('sendBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const modelSel = document.getElementById('model');
+    const tempRange = document.getElementById('temperature');
+    const tempVal = document.getElementById('tempVal');
+    const maxTokensEl = document.getElementById('maxTokens');
+    const kModel = document.getElementById('kModel');
+    const kLatency = document.getElementById('kLatency');
+    const kTokens = document.getElementById('kTokens');
+    const toast = document.getElementById('toast');
+
+    // hydrate from URL params
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('model')) modelSel.value = params.get('model');
+    if (params.get('temperature')) { tempRange.value = params.get('temperature'); tempVal.textContent = tempRange.value; }
+    if (params.get('max_tokens')) maxTokensEl.value = params.get('max_tokens');
+    kModel.textContent = modelSel.value;
+
+    tempRange.addEventListener('input', () => tempVal.textContent = tempRange.value);
+    modelSel.addEventListener('change', () => { kModel.textContent = modelSel.value; updateQuery(); });
+    tempRange.addEventListener('change', updateQuery);
+    maxTokensEl.addEventListener('change', updateQuery);
+
+    function updateQuery(){
+      const q = new URLSearchParams(window.location.search);
+      q.set('model', modelSel.value);
+      q.set('temperature', tempRange.value);
+      q.set('max_tokens', maxTokensEl.value);
+      history.replaceState(null, '', `?${q.toString()}`);
+    }
+
+    function scrollBottom(){ chat.scrollTop = chat.scrollHeight; }
+
+    function showToast(msg){
+      toast.textContent = msg;
+      toast.style.display = 'block';
+      setTimeout(()=> toast.style.display = 'none', 1800);
+    }
+
+    clearBtn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      window.location.href = "{{ url_for('clear') }}";
+    });
+
+    copyBtn.addEventListener('click', ()=>{
+      const lines = [...chat.querySelectorAll('.msg')].map(m => {
+        const role = m.classList.contains('user') ? 'User' : 'Assistant';
+        const txt = m.querySelector('.content')?.textContent || '';
+        return `${role}: ${txt}`;
+      }).join('\n\n');
+      navigator.clipboard.writeText(lines).then(()=>showToast('Conversation copied'));
+    });
+
+    downloadBtn.addEventListener('click', ()=>{
+      const lines = [...chat.querySelectorAll('.msg')].map(m => {
+        const role = m.classList.contains('user') ? 'User' : 'Assistant';
+        const txt = m.querySelector('.content')?.textContent || '';
+        return `${role}: ${txt}`;
+      }).join('\n\n');
+      const blob = new Blob([lines], {type:'text/plain'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'conversation.txt';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    // Enter to send, Shift+Enter for newline
+    promptEl.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        sendBtn.click();
+      }
+    });
+
+    sendBtn.addEventListener('click', async ()=>{
+      const prompt = promptEl.value.trim();
+      if(!prompt) return;
+      const startTs = performance.now();
+
+      // append user bubble
+      const u = document.createElement('div');
+      u.className = 'msg user';
+      u.innerHTML = `<span class="role">User</span><div class="content"></div>`;
+      u.querySelector('.content').textContent = prompt;
+      chat.appendChild(u);
+
+      // append assistant bubble (streaming)
+      const a = document.createElement('div');
+      a.className = 'msg assistant pending';
+      a.innerHTML = `<span class="role">Assistant</span><div class="content"></div>`;
+      const aContent = a.querySelector('.content');
+      chat.appendChild(a);
+      scrollBottom();
+
+      // call streaming endpoint
+      sendBtn.disabled = true;
+      try{
+        const resp = await fetch('/api/chat/stream', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            prompt,
+            // settings come from server session via query params; we just update URL
+          })
+        });
+        if(!resp.ok){ throw new Error(`HTTP ${resp.status}`); }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let tokCount = 0;
+
+        while(true){
+          const {value, done} = await reader.read();
+          if(done) break;
+          const chunk = decoder.decode(value, {stream:true});
+          tokCount += (chunk.match(/\s+/g)?.length || 0) + 1;
+          aContent.textContent += chunk;
+          scrollBottom();
+        }
+
+        a.classList.remove('pending');
+        kLatency.textContent = `${Math.max(1, Math.round(performance.now() - startTs))} ms`;
+        kTokens.textContent = `${tokCount}`;
+        promptEl.value = '';
+      }catch(err){
+        a.classList.remove('pending');
+        aContent.textContent = `Error: ${err.message}`;
+      }finally{
+        sendBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
